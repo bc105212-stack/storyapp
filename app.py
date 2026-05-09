@@ -11,42 +11,38 @@ def load_caption_model():
 
 @st.cache_resource
 def load_story_model():
-    # Use distilgpt2 with repetition penalty and no repeat ngram to avoid loops
-    return pipeline("text-generation", model="distilgpt2")
+    # Use flan-t5-small for speed and better long-output capability
+    return pipeline("text2text-generation", model="google/flan-t5-small")
 
 # ------------------- Core Functions -------------------
 def img2text(pil_image):
     model = load_caption_model()
     result = model(pil_image)
-    return result[0]['generated_text']
+    caption = result[0]['generated_text']
+    return caption
 
 def text2story(caption):
     model = load_story_model()
-    # Clean caption: remove extra spaces and ensure it's a proper sentence
-    caption = caption.strip().capitalize()
-    prompt = f"Write a short children's story about {caption}. "
+    prompt = f"Write a long children's story (at least 150 words) based on this description: {caption}"
     output = model(
         prompt,
-        max_new_tokens=120,
+        max_new_tokens=300,
+        min_new_tokens=100,
         do_sample=True,
-        temperature=0.7,
-        top_p=0.9,
-        repetition_penalty=1.2,
-        no_repeat_ngram_size=3,
-        pad_token_id=50256
+        temperature=0.8,
+        early_stopping=False,
+        no_repeat_ngram_size=3
     )
-    story = output[0]['generated_text']
-    # Remove prompt if repeated
-    if story.startswith(prompt):
-        story = story[len(prompt):]
-    # Cut at first occurrence of "The end" or period+newline for cleanliness
-    # Also limit to first 200 words
-    words = story.split()
-    if len(words) > 150:
-        story = ' '.join(words[:150]) + "..."
-    # Ensure story ends with a period
-    if not story.endswith(('.', '!', '?')):
-        story += '.'
+    story = output[0]['generated_text'].strip()
+    # If still too short (less than 50 words), generate a continuation
+    if len(story.split()) < 50:
+        continuation = model(
+            story + " Then,",
+            max_new_tokens=200,
+            do_sample=True,
+            temperature=0.8
+        )[0]['generated_text'].strip()
+        story = story + " " + continuation
     return story
 
 def text2audio(story_text):
@@ -58,7 +54,7 @@ def text2audio(story_text):
 # ------------------- Streamlit UI (no icons) -------------------
 st.set_page_config(page_title="Storytime for Kids", page_icon=None)
 st.title("Picture-to-Story for Kids")
-st.write("Upload any picture, and I'll create a short children's story with audio!")
+st.write("Upload any picture, and I'll create a long children's story with audio!")
 
 uploaded_file = st.file_uploader("Choose an image", type=['jpg', 'jpeg', 'png'])
 
@@ -70,7 +66,7 @@ if uploaded_file is not None:
         caption = img2text(pil_image)
     st.success(f"Caption: {caption}")
 
-    with st.spinner("Writing a story..."):
+    with st.spinner("Writing a long story (min. 150 words)..."):
         story = text2story(caption)
     st.subheader("Your Story")
     st.write(story)
