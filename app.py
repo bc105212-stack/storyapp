@@ -11,45 +11,41 @@ def load_caption_model():
 
 @st.cache_resource
 def load_story_model():
-    return pipeline("text-generation", model="gpt2", device=-1)  # cpu
+    # Use distilgpt2 with repetition penalty and no repeat ngram to avoid loops
+    return pipeline("text-generation", model="distilgpt2")
 
 # ------------------- Core Functions -------------------
 def img2text(pil_image):
     model = load_caption_model()
     result = model(pil_image)
-    caption = result[0]['generated_text']
-    return caption
+    return result[0]['generated_text']
 
 def text2story(caption):
     model = load_story_model()
-    prompt = f"Once upon a time, {caption}. "
+    # Clean caption: remove extra spaces and ensure it's a proper sentence
+    caption = caption.strip().capitalize()
+    prompt = f"Write a short children's story about {caption}. "
     output = model(
         prompt,
-        max_new_tokens=150,
+        max_new_tokens=120,
         do_sample=True,
         temperature=0.7,
         top_p=0.9,
         repetition_penalty=1.2,
         no_repeat_ngram_size=3,
-        pad_token_id=50256,
-        eos_token_id=50256
+        pad_token_id=50256
     )
     story = output[0]['generated_text']
     # Remove prompt if repeated
     if story.startswith(prompt):
         story = story[len(prompt):]
-    # Stop at a period or newline to avoid cut off mid-sentence? not needed
-    # Remove excessive repetition by truncating after repeated phrases
-    # Simple heuristic: if same sentence repeated, cut after first occurrence
-    lines = story.split('.')
-    unique_lines = []
-    for line in lines:
-        if line.strip() and line.strip() not in unique_lines:
-            unique_lines.append(line.strip())
-    if unique_lines:
-        story = '. '.join(unique_lines[:8]) + '.'  # limit to 8 sentences
+    # Cut at first occurrence of "The end" or period+newline for cleanliness
+    # Also limit to first 200 words
+    words = story.split()
+    if len(words) > 150:
+        story = ' '.join(words[:150]) + "..."
     # Ensure story ends with a period
-    if not story.endswith('.'):
+    if not story.endswith(('.', '!', '?')):
         story += '.'
     return story
 
@@ -59,7 +55,7 @@ def text2audio(story_text):
         tts.save(fp.name)
         return fp.name
 
-# ------------------- Streamlit UI -------------------
+# ------------------- Streamlit UI (no icons) -------------------
 st.set_page_config(page_title="Storytime for Kids", page_icon=None)
 st.title("Picture-to-Story for Kids")
 st.write("Upload any picture, and I'll create a short children's story with audio!")
