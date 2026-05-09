@@ -12,70 +12,84 @@ def load_caption_model():
 
 @st.cache_resource
 def load_story_model():
-    # Specialized story generation model (fine-tuned on stories)
-    return pipeline("text-generation", model="pranavpsv/genre-story-generator-v2")
+    # Using standard GPT-2 (small but better than distilgpt2)
+    # If memory is tight, change to "distilgpt2"
+    return pipeline("text-generation", model="gpt2")
 
-# ------------------- Story Generation with Retry -------------------
-def is_bad_story(text):
-    """Detect if the story contains gibberish or first-person meta comments."""
-    bad_phrases = [
-        "i didn't know", "i think", "in my opinion", "wikipedia",
-        "this is a test", "you see what happened", "future generations"
+# ------------------- Clean & Filter -------------------
+def clean_story(raw_story):
+    """Remove first-person ramblings, placeholders, and unnatural text."""
+    # Remove anything before the first real sentence (sometimes model outputs "____")
+    raw_story = re.sub(r'^[^A-Za-z]*', '', raw_story)
+    
+    # Remove lines that contain blacklisted phrases
+    blacklist = [
+        r'I\s+', r'my\s+', r'opinion', r'Wikipedia', r'_____', r'___',
+        r'personal', r'you see', r'let me', r'I think', r'I didn\'t know',
+        r'future generations', r'more information'
     ]
-    lower = text.lower()
-    for phrase in bad_phrases:
-        if phrase in lower:
-            return True
-    # Also if story ends with punctuation but has no space after period? Not needed.
-    # Detect if story is very short or starts with a comma
-    if len(text.split()) < 10:
-        return True
-    if text.startswith(',') or text.startswith('.'):
-        return True
-    return False
+    for pattern in blacklist:
+        raw_story = re.sub(pattern, '', raw_story, flags=re.IGNORECASE)
+    
+    # Remove parentheticals
+    raw_story = re.sub(r'\([^)]*\)', '', raw_story)
+    # Remove extra spaces and newlines
+    raw_story = re.sub(r'\s+', ' ', raw_story).strip()
+    return raw_story
 
-def generate_clean_story(caption, retries=2):
-    """Generate story and retry if output is bad."""
+def truncate_to_sentence(text, max_words=180):
+    """Truncate text to the last complete sentence within max_words."""
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    truncated = ' '.join(words[:max_words])
+    # Find last sentence boundary (. ! ?)
+    match = re.search(r'(.*[.!?])\s', truncated)
+    if match:
+        return match.group(1)
+    else:
+        return truncated
+
+def text2story(caption):
     model = load_story_model()
-    # Strong prompt that asks for a short children's story
-    prompt = f"Write a short story for children about {caption}\nStory: "
     
-    for attempt in range(retries + 1):
-        # Adjust randomness: lower temperature on retry
-        temp = 0.6 if attempt == 0 else 0.4
-        output = model(
-            prompt,
-            max_new_tokens=100,
-            do_sample=True,
-            temperature=temp,
-            top_p=0.9,
-            repetition_penalty=1.2,
-            pad_token_id=50256
-        )
-        story = output[0]['generated_text']
-        # Remove prompt if present
-        if story.startswith(prompt):
-            story = story[len(prompt):]
-        # Clean up line breaks and extra spaces
-        story = re.sub(r'\s+', ' ', story).strip()
-        
-        # Ensure ending punctuation
-        if story and story[-1] not in '.!?':
-            story += '.'
-        
-        # Check quality
-        if not is_bad_story(story):
-            # Truncate to last sentence within 100 words
-            words = story.split()
-            if len(words) > 100:
-                truncated = ' '.join(words[:100])
-                match = re.search(r'(.*[.!?])\s', truncated)
-                if match:
-                    story = match.group(1)
-            return story
+    # Natural story prompt
+    prompt = f"Once upon a time, {caption}. One day, "
     
-    # If all attempts fail, craft a safe default story
-    return f"Once upon a time, {caption}. It was a beautiful day full of joy and laughter. The end."
+    output = model(
+        prompt,
+        max_new_tokens=160,          # Longer generation for completeness
+        do_sample=True,
+        temperature=0.65,             # Less random
+        top_p=0.9,
+        repetition_penalty=1.3,
+        pad_token_id=50256
+    )
+    
+    story = output[0]['generated_text']
+    
+    # Remove the prompt from the beginning
+    if story.startswith(prompt):
+        story = story[len(prompt):]
+    else:
+        # Fallback: remove the first sentence if it contains the prompt
+        story = re.sub(r'^Once upon a time,.*?\.\s*', '', story)
+    
+    # Clean up weird content
+    story = clean_story(story)
+    
+    # Ensure the story ends with a complete sentence
+    story = truncate_to_sentence(story, max_words=180)
+    
+    # Force ending punctuation
+    if story and story[-1] not in '.!?':
+        story += '.'
+    
+    # If story is still too short (<30 words), add a generic happy ending
+    if len(story.split()) < 30 and len(story) > 0:
+        story += " It was a wonderful day, and everyone felt happy."
+    
+    return story.strip()
 
 def img2text(pil_image):
     model = load_caption_model()
@@ -91,7 +105,7 @@ def text2audio(story_text):
 # ------------------- Streamlit UI (no icons) -------------------
 st.set_page_config(page_title="Storytime for Kids", page_icon=None)
 st.title("Picture-to-Story for Kids")
-st.write("Upload any picture, and I'll create a short 50-100 word story with audio!")
+st.write("Upload any picture, and I'll create a fun, complete story with audio!")
 
 uploaded_file = st.file_uploader("Choose an image", type=['jpg', 'jpeg', 'png'])
 
@@ -103,14 +117,14 @@ if uploaded_file is not None:
         caption = img2text(pil_image)
     st.success(f"Caption: {caption}")
 
-    with st.spinner("Writing a coherent story (50-100 words)..."):
-        story = generate_clean_story(caption)
+    with st.spinner("Writing a complete story..."):
+        story = text2story(caption)
     st.subheader("Your Story")
     st.write(story)
     word_count = len(story.split())
-    st.caption(f"Word count: {word_count} words")
+    st.caption(f"Word count: {word_count} words (story is complete)")
 
     with st.spinner("Creating voice audio..."):
         audio_path = text2audio(story)
     st.audio(audio_path, format='audio/mp3')
-    st.info("Click the play button above to listen to the story!")
+    st.info("Click the play button above to hear the story read aloud.")
