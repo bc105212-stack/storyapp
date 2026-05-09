@@ -24,7 +24,7 @@ def text2story(caption):
     prompt = f"Write a children's story based on: {caption}\n\nStory:"
     output = model(
         prompt,
-        max_new_tokens=300,          # Enough for 200-250 words
+        max_new_tokens=200,          # Enough for 200-250 words
         do_sample=True,
         temperature=0.8,
         repetition_penalty=1.1,
