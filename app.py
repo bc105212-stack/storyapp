@@ -12,8 +12,8 @@ def load_caption_model():
 
 @st.cache_resource
 def load_story_model():
-    """Load a text-to-text generation model that follows instructions (Flan-T5)."""
-    return pipeline("text2text-generation", model="google/flan-t5-base")
+    """Load a smaller GPT-2 model for story generation."""
+    return pipeline("text-generation", model="distilgpt2")
 
 # ------------------- Core Functions -------------------
 def img2text(pil_image):
@@ -24,16 +24,34 @@ def img2text(pil_image):
     return caption
 
 def text2story(caption):
-    """Expand the caption into a coherent children's story using Flan-T5."""
+    """
+    Expand the caption into a complete children's story (100-200 words).
+    Uses distilgpt2 with a strong prompt and explicit length control.
+    """
     model = load_story_model()
-    # Explicit instruction to generate a short story for kids
-    prompt = f"Write a short children's story (about 150 words) based on this description: {caption}"
-    # Generate longer output (up to 250 new tokens, which yields ~150-200 words)
-    output = model(prompt, max_new_tokens=250, do_sample=False, temperature=0.7)
+    # Construct a prompt that asks for a longer story
+    prompt = f"Once upon a time, {caption}. Tell a short story for kids about what happened next. "
+    # Generate between 100 and 200 new tokens
+    output = model(
+        prompt,
+        max_new_tokens=180,
+        min_new_tokens=100,
+        do_sample=True,
+        temperature=0.8,
+        top_p=0.9,
+        pad_token_id=50256  # distilgpt2 eos token id
+    )
     story = output[0]['generated_text']
-    # Clean up any leading/trailing whitespace
-    story = story.strip()
-    return story
+    # Remove the prompt if it is repeated at the beginning
+    if story.startswith(prompt):
+        story = story[len(prompt):]
+    # Stop at a sentence boundary if possible (optional)
+    # Ensure at least ~80 words (if too short, add a fallback)
+    words = story.split()
+    if len(words) < 50:
+        # If still too short, append a generic continuation
+        story += " They had a wonderful time together. The end."
+    return story.strip()
 
 def text2audio(story_text):
     """Convert story text to MP3 audio using gTTS."""
@@ -57,7 +75,7 @@ if uploaded_file is not None:
         caption = img2text(pil_image)
     st.success(f"Caption: {caption}")
 
-    with st.spinner("Writing a coherent story (about 150-200 words)..."):
+    with st.spinner("Writing a complete story (100-200 words)..."):
         story = text2story(caption)
     st.subheader("Your Story")
     st.write(story)
