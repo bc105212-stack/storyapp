@@ -4,52 +4,52 @@ from gtts import gTTS
 import tempfile
 from PIL import Image
 
-# ------------------- Model Loaders (cached) -------------------
 @st.cache_resource
 def load_caption_model():
-    """Load image-to-text pipeline from Hugging Face."""
     return pipeline("image-to-text", model="Salesforce/blip-image-captioning-base")
 
 @st.cache_resource
 def load_story_model():
-    """Load text-generation pipeline (GPT-2 for short stories)."""
     return pipeline("text-generation", model="gpt2")
 
-# ------------------- Core Functions -------------------
 def img2text(pil_image):
-    """
-    Generate a caption from a PIL Image object.
-    Args:
-        pil_image (PIL.Image): The image opened by PIL.
-    Returns:
-        str: Generated caption.
-    """
     model = load_caption_model()
     result = model(pil_image)
     caption = result[0]['generated_text']
     return caption
 
 def text2story(caption):
-    """Expand the caption into a 50-100 word children's story."""
     model = load_story_model()
-    prompt = f"Once upon a time, {caption}. "
-    output = model(prompt, max_new_tokens=80, do_sample=True, temperature=0.8)
+    prompt = f"Once upon a time, {caption}. Write a short and complete story for kids in 50 to 100 words:"
+    output = model(
+        prompt,
+        max_new_tokens=120,
+        do_sample=True,
+        temperature=0.6,
+        top_p=0.95,
+        repetition_penalty=1.2,
+        early_stopping=True,
+        pad_token_id=50256
+    )
     story = output[0]['generated_text']
     if story.startswith(prompt):
         story = story[len(prompt):]
+    story = story.strip()
+    if story and story[-1] not in '.!?':
+        story += '.'
     words = story.split()
     if len(words) > 100:
-        story = ' '.join(words[:100]) + '...'
+        story = ' '.join(words[:100])
+        if story[-1] not in '.!?':
+            story += '...'
     return story
 
 def text2audio(story_text):
-    """Convert story text to MP3 audio using gTTS."""
     tts = gTTS(text=story_text, lang='en', slow=False)
     with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as fp:
         tts.save(fp.name)
         return fp.name
 
-# ------------------- Streamlit UI (no icons) -------------------
 st.set_page_config(page_title="Storytime for Kids", page_icon=None)
 st.title("Picture-to-Story for Kids")
 st.write("Upload any picture, and I'll create a short 50-100 word story with audio!")
